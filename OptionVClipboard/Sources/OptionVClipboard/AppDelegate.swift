@@ -27,8 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "OptionVClipboard")
-        item.button?.image?.isTemplate = true
+        item.button?.image = statusBarImage()
+        item.button?.imageScaling = .scaleProportionallyDown
+        item.button?.toolTip = "OptionVClipboard"
 
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -52,6 +53,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
         statusItem = item
         updateCaptureMenuTitle()
+    }
+
+    private func statusBarImage() -> NSImage? {
+        if let imageURL = Bundle.main.url(forResource: "MenuBarLogo", withExtension: "png"),
+           let image = NSImage(contentsOf: imageURL) {
+            image.size = NSSize(width: 18, height: 18)
+            image.isTemplate = true
+            return image
+        }
+
+        let fallbackImage = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "OptionVClipboard")
+        fallbackImage?.isTemplate = true
+        return fallbackImage
     }
 
     private func loadHistory() {
