@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/review_with_claude.py",
+            "timeout": 180,
+            "statusMessage": "Claude reviewing Codex output"
+          }
+        ]
+      }
+    ]
+  }
+}
