@@ -18,6 +18,9 @@ rm -rf "$app_dir"
 mkdir -p "$macos_dir" "$resources_dir"
 cp "$release_bin" "$macos_dir/OptionVClipboard"
 cp "$info_plist_src" "$info_plist_dst"
+while IFS= read -r resource_file; do
+    cp "$resource_file" "$resources_dir/"
+done < <(find "$project_dir/Resources" -maxdepth 1 -type f ! -name 'Info.plist')
 chmod 755 "$macos_dir/OptionVClipboard"
 
 codesign --force --deep --sign - --timestamp=none "$app_dir"

@@ -4,8 +4,8 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsStore = SettingsStore()
     private lazy var historyStore = HistoryStore(settings: settingsStore)
-    private lazy var clipboardWatcher = ClipboardWatcher(settings: settingsStore) { [weak self] text in
-        self?.handleCapturedText(text)
+    private lazy var clipboardWatcher = ClipboardWatcher(settings: settingsStore) { [weak self] item in
+        self?.handleCapturedItem(item)
     }
     private lazy var hotkeyManager = HotkeyManager()
     private lazy var historyWindowController = HistoryWindowController()
@@ -27,8 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "OptionVClipboard")
-        item.button?.image?.isTemplate = true
+        item.button?.image = statusBarImage()
+        item.button?.imageScaling = .scaleProportionallyDown
+        item.button?.toolTip = "OptionVClipboard"
 
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -52,6 +53,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = menu
         statusItem = item
         updateCaptureMenuTitle()
+    }
+
+    private func statusBarImage() -> NSImage? {
+        if let imageURL = Bundle.main.url(forResource: "MenuBarLogo", withExtension: "png"),
+           let image = NSImage(contentsOf: imageURL) {
+            image.size = NSSize(width: 18, height: 18)
+            // Menu bar icons should be template images so the system can adapt
+            // them automatically for light and dark appearances.
+            image.isTemplate = true
+            return image
+        }
+
+        let fallbackImage = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "OptionVClipboard")
+        fallbackImage?.isTemplate = true
+        return fallbackImage
     }
 
     private func loadHistory() {
@@ -88,9 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func handleCapturedText(_ text: String) {
+    private func handleCapturedItem(_ item: ClipboardItem) {
         do {
-            _ = try historyStore.addText(text, source: nil)
+            _ = try historyStore.addItem(item)
         } catch {
             return
         }
@@ -138,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func copyToPasteboard(_ item: ClipboardItem) -> Bool {
         autoPasteController.cancelPendingPaste()
 
-        guard clipboardWatcher.writeToPasteboard(item.text) else {
+        guard clipboardWatcher.writeToPasteboard(item) else {
             presentErrorAlert(
                 title: "Unable to Copy Item",
                 message: "OptionVClipboard could not write the selected item to the clipboard."

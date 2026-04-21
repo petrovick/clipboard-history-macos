@@ -1,17 +1,18 @@
 import AppKit
 import Foundation
+import ImageIO
 
-/// Polls the shared pasteboard and forwards safe plain-text captures.
+/// Polls the shared pasteboard and forwards supported clipboard captures.
 @MainActor
 final class ClipboardWatcher {
     private let settings: SettingsStore
     private let pasteboard: NSPasteboard
-    private let onCapture: (String) -> Void
+    private let onCapture: (ClipboardItem) -> Void
 
     private var timer: Timer?
     private var lastSeenChangeCount: Int
     private var ignoredChangeCounts = Set<Int>()
-    private var lastCapturedText: String?
+    private var lastCapturedItem: ClipboardItem?
 
     private static let pollInterval: TimeInterval = 0.75
     private static let ignoredPasteboardTypes: Set<String> = [
@@ -24,7 +25,7 @@ final class ClipboardWatcher {
     init(
         settings: SettingsStore,
         pasteboard: NSPasteboard = .general,
-        onCapture: @escaping (String) -> Void
+        onCapture: @escaping (ClipboardItem) -> Void
     ) {
         self.settings = settings
         self.pasteboard = pasteboard
@@ -56,9 +57,14 @@ final class ClipboardWatcher {
     }
 
     @discardableResult
-    func writeToPasteboard(_ text: String) -> Bool {
+    func writeToPasteboard(_ item: ClipboardItem) -> Bool {
+        let pasteboardItems = makePasteboardItems(from: item)
+        guard pasteboardItems.isEmpty == false else {
+            return false
+        }
+
         pasteboard.clearContents()
-        let success = pasteboard.setString(text, forType: .string)
+        let success = pasteboard.writeObjects(pasteboardItems)
         guard success else {
             return false
         }
@@ -67,7 +73,7 @@ final class ClipboardWatcher {
         return true
     }
 
-    private func pollPasteboard() {
+    func pollPasteboard() {
         let currentChangeCount = pasteboard.changeCount
 
         if consumeIgnoredChangeCount(currentChangeCount) {
@@ -94,27 +100,228 @@ final class ClipboardWatcher {
             return
         }
 
-        guard let text = firstPlainText(in: items)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              text.isEmpty == false else {
+        guard let item = makeClipboardItem(from: items) else {
             return
         }
 
-        guard text.utf8.count <= settings.maxItemSizeBytes else {
+        guard item.storedDataSize <= settings.maxItemSizeBytes else {
             return
         }
 
-        let filter = SecretFilter(skipShortOneTimeCodes: settings.skipShortOneTimeCodes)
-        guard filter.shouldReject(text) == false else {
+        if item.contentKind == .text {
+            let filter = SecretFilter(skipShortOneTimeCodes: settings.skipShortOneTimeCodes)
+            guard filter.shouldReject(item.text) == false else {
+                return
+            }
+        }
+
+        guard readLastCapturedItem()?.hasSamePayload(as: item) != true else {
             return
         }
 
-        guard text != readLastCapturedText() else {
-            return
-        }
-
-        rememberCapturedText(text)
-        onCapture(text)
+        rememberCapturedItem(item)
+        onCapture(item)
     }
+
+    private func makeClipboardItem(from items: [NSPasteboardItem]) -> ClipboardItem? {
+        guard let contentKind = contentKind(in: items) else {
+            return nil
+        }
+
+        let storedItems = storedPasteboardItems(from: items, contentKind: contentKind)
+        guard storedItems.isEmpty == false else {
+            return nil
+        }
+
+        let previewText = displayText(for: contentKind, storedItems: storedItems, originalItems: items)
+        guard previewText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            return nil
+        }
+
+        return ClipboardItem(
+            text: previewText,
+            source: nil,
+            contentKind: contentKind,
+            pasteboardItems: storedItems
+        )
+    }
+
+    private func makePasteboardItems(from item: ClipboardItem) -> [NSPasteboardItem] {
+        item.pasteboardItems.compactMap { storedItem in
+            let pasteboardItem = NSPasteboardItem()
+            var didSetRepresentation = false
+
+            for representation in storedItem.representations {
+                if pasteboardItem.setData(
+                    representation.data,
+                    forType: NSPasteboard.PasteboardType(representation.type)
+                ) {
+                    didSetRepresentation = true
+                }
+            }
+
+            return didSetRepresentation ? pasteboardItem : nil
+        }
+    }
+
+    private func contentKind(in items: [NSPasteboardItem]) -> ClipboardItem.ContentKind? {
+        if items.contains(where: hasFileURLContent) {
+            return .fileURLs
+        }
+
+        if items.contains(where: hasImageContent) {
+            return .image
+        }
+
+        if firstPlainText(in: items)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return .text
+        }
+
+        return nil
+    }
+
+    private func hasFileURLContent(_ item: NSPasteboardItem) -> Bool {
+        item.types.contains { type in
+            Self.singleFileURLPasteboardTypes.contains(type) || type == Self.fileNamesPasteboardType
+        }
+    }
+
+    private func hasImageContent(_ item: NSPasteboardItem) -> Bool {
+        item.types.contains { type in
+            Self.imagePasteboardTypes.contains(type)
+        }
+    }
+
+    private func storedPasteboardItems(
+        from items: [NSPasteboardItem],
+        contentKind: ClipboardItem.ContentKind
+    ) -> [ClipboardItem.StoredPasteboardItem] {
+        let allowedTypes = pasteboardTypes(for: contentKind)
+
+        return items.compactMap { item in
+            var representations: [ClipboardItem.PasteboardRepresentation] = []
+
+            for type in item.types where allowedTypes.contains(type) {
+                if let data = item.data(forType: type) {
+                    representations.append(
+                        ClipboardItem.PasteboardRepresentation(type: type.rawValue, data: data)
+                    )
+                } else if type == .string, let string = item.string(forType: .string) {
+                    representations.append(
+                        ClipboardItem.PasteboardRepresentation(type: type.rawValue, data: Data(string.utf8))
+                    )
+                }
+            }
+
+            guard representations.isEmpty == false else {
+                return nil
+            }
+
+            return ClipboardItem.StoredPasteboardItem(representations: representations)
+        }
+    }
+
+    private func pasteboardTypes(for contentKind: ClipboardItem.ContentKind) -> Set<NSPasteboard.PasteboardType> {
+        switch contentKind {
+        case .text:
+            return [.string]
+        case .image:
+            return Self.imagePasteboardTypes
+        case .fileURLs:
+            return Self.fileURLPasteboardTypes
+        }
+    }
+
+    private func displayText(
+        for contentKind: ClipboardItem.ContentKind,
+        storedItems: [ClipboardItem.StoredPasteboardItem],
+        originalItems: [NSPasteboardItem]
+    ) -> String {
+        switch contentKind {
+        case .text:
+            return firstPlainText(in: originalItems) ?? "Text"
+        case .image:
+            return imageDisplayText(in: storedItems)
+        case .fileURLs:
+            return fileURLDisplayText(in: storedItems)
+        }
+    }
+
+    private func imageDisplayText(in storedItems: [ClipboardItem.StoredPasteboardItem]) -> String {
+        for representation in storedItems.flatMap(\.representations) {
+            if let dimensions = imageDimensions(in: representation.data) {
+                return "[Image] \(dimensions.width) x \(dimensions.height)"
+            }
+        }
+
+        return "[Image]"
+    }
+
+    private func imageDimensions(in data: Data) -> (width: Int, height: Int)? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+            return nil
+        }
+
+        return (width, height)
+    }
+
+    private func fileURLDisplayText(in storedItems: [ClipboardItem.StoredPasteboardItem]) -> String {
+        let fileNames = fileNames(in: storedItems)
+
+        if fileNames.count == 1, let fileName = fileNames.first {
+            return "[File] \(fileName)"
+        }
+
+        if fileNames.isEmpty == false {
+            return "[Files] \(fileNames.count) items"
+        }
+
+        return "[Files]"
+    }
+
+    private func fileNames(in storedItems: [ClipboardItem.StoredPasteboardItem]) -> [String] {
+        var fileNames: [String] = []
+
+        for representation in storedItems.flatMap(\.representations) {
+            let type = NSPasteboard.PasteboardType(representation.type)
+
+            if Self.singleFileURLPasteboardTypes.contains(type),
+               let string = String(data: representation.data, encoding: .utf8),
+               let url = URL(string: string) {
+                fileNames.append(url.lastPathComponent)
+            } else if type == Self.fileNamesPasteboardType,
+                      let paths = try? PropertyListSerialization.propertyList(
+                        from: representation.data,
+                        options: [],
+                        format: nil
+                      ) as? [String] {
+                fileNames.append(contentsOf: paths.map { URL(fileURLWithPath: $0).lastPathComponent })
+            }
+        }
+
+        return fileNames.filter { $0.isEmpty == false }
+    }
+
+    private static let promisedFileURLPasteboardType = NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url")
+    private static let fileNamesPasteboardType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+    private static let imagePasteboardTypes: Set<NSPasteboard.PasteboardType> = [
+        .png,
+        .tiff,
+        .pdf
+    ]
+    private static let singleFileURLPasteboardTypes: Set<NSPasteboard.PasteboardType> = [
+        .fileURL,
+        promisedFileURLPasteboardType
+    ]
+    private static let fileURLPasteboardTypes: Set<NSPasteboard.PasteboardType> = [
+        .fileURL,
+        promisedFileURLPasteboardType,
+        .string,
+        fileNamesPasteboardType
+    ]
 
     private func shouldSkipPasteboardItem(_ item: NSPasteboardItem) -> Bool {
         let types = item.types.map(\.rawValue)
@@ -148,11 +355,11 @@ final class ClipboardWatcher {
         return lastSeenChangeCount
     }
 
-    private func readLastCapturedText() -> String? {
-        return lastCapturedText
+    private func readLastCapturedItem() -> ClipboardItem? {
+        return lastCapturedItem
     }
 
-    private func rememberCapturedText(_ text: String) {
-        lastCapturedText = text
+    private func rememberCapturedItem(_ item: ClipboardItem) {
+        lastCapturedItem = item
     }
 }
