@@ -2,17 +2,25 @@ import AppKit
 
 final class HistoryWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     private enum Constants {
-        static let windowWidth: CGFloat = 560
-        static let windowHeight: CGFloat = 420
+        static let windowWidth: CGFloat = 760
+        static let windowHeight: CGFloat = 460
         static let contentInset: CGFloat = 16
         static let rowHeight: CGFloat = 44
         static let searchFieldHeight: CGFloat = 28
         static let hintLabelHeight: CGFloat = 18
+        static let contentSpacing: CGFloat = 12
+        static let previewWidth: CGFloat = 240
+        static let previewInset: CGFloat = 12
+        static let listWidth = windowWidth - (contentInset * 2) - contentSpacing - previewWidth
     }
 
     private let searchField = HistorySearchField(frame: .zero)
     private let tableView = HistoryTableView(frame: .zero)
     private let scrollView = NSScrollView(frame: .zero)
+    private let previewContainer = PreviewContainerView(frame: .zero)
+    private let previewImageView = NSImageView(frame: .zero)
+    private let previewCaptionField = NSTextField(labelWithString: "")
+    private let previewTextField = NSTextField(wrappingLabelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "Enter or Cmd+C copies. Double-click pastes.")
 
     private var allItems: [ClipboardItem] = []
@@ -153,7 +161,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HistoryColumn"))
         column.resizingMask = .autoresizingMask
-        column.width = Constants.windowWidth - (Constants.contentInset * 2)
+        column.width = Constants.listWidth
         tableView.addTableColumn(column)
         tableView.autoresizingMask = [.width]
         tableView.frame = NSRect(x: 0, y: 0, width: column.width, height: Constants.rowHeight)
@@ -165,13 +173,24 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         scrollView.borderType = .bezelBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        configurePreview()
+
+        let contentStackView = NSStackView()
+        contentStackView.orientation = .horizontal
+        contentStackView.alignment = .height
+        contentStackView.distribution = .fill
+        contentStackView.spacing = Constants.contentSpacing
+        contentStackView.translatesAutoresizingMaskIntoConstraints = false
+        contentStackView.addArrangedSubview(scrollView)
+        contentStackView.addArrangedSubview(previewContainer)
+
         hintLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         hintLabel.textColor = .secondaryLabelColor
         hintLabel.alignment = .center
         hintLabel.translatesAutoresizingMaskIntoConstraints = false
 
         stackView.addArrangedSubview(searchContainer)
-        stackView.addArrangedSubview(scrollView)
+        stackView.addArrangedSubview(contentStackView)
         stackView.addArrangedSubview(hintLabel)
 
         rootView.addSubview(stackView)
@@ -182,7 +201,8 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
             stackView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: Constants.contentInset),
             stackView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -Constants.contentInset),
             hintLabel.heightAnchor.constraint(equalToConstant: Constants.hintLabelHeight),
-            scrollView.heightAnchor.constraint(
+            previewContainer.widthAnchor.constraint(equalToConstant: Constants.previewWidth),
+            contentStackView.heightAnchor.constraint(
                 equalToConstant: Constants.windowHeight - (
                     Constants.contentInset * 2
                         + Constants.searchFieldHeight
@@ -193,6 +213,45 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         ])
 
         tableView.reloadData()
+        updatePreview()
+    }
+
+    private func configurePreview() {
+        previewContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        previewImageView.translatesAutoresizingMaskIntoConstraints = false
+        previewImageView.imageAlignment = .alignCenter
+        previewImageView.imageScaling = .scaleProportionallyUpOrDown
+
+        previewCaptionField.translatesAutoresizingMaskIntoConstraints = false
+        previewCaptionField.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        previewCaptionField.textColor = .secondaryLabelColor
+        previewCaptionField.alignment = .center
+        previewCaptionField.lineBreakMode = .byTruncatingTail
+
+        previewTextField.translatesAutoresizingMaskIntoConstraints = false
+        previewTextField.font = .systemFont(ofSize: NSFont.systemFontSize)
+        previewTextField.textColor = .secondaryLabelColor
+        previewTextField.alignment = .center
+        previewTextField.maximumNumberOfLines = 0
+
+        previewContainer.addSubview(previewImageView)
+        previewContainer.addSubview(previewCaptionField)
+        previewContainer.addSubview(previewTextField)
+
+        NSLayoutConstraint.activate([
+            previewImageView.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor, constant: Constants.previewInset),
+            previewImageView.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor, constant: -Constants.previewInset),
+            previewImageView.topAnchor.constraint(equalTo: previewContainer.topAnchor, constant: Constants.previewInset),
+            previewImageView.bottomAnchor.constraint(equalTo: previewCaptionField.topAnchor, constant: -8),
+            previewCaptionField.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor, constant: Constants.previewInset),
+            previewCaptionField.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor, constant: -Constants.previewInset),
+            previewCaptionField.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor, constant: -Constants.previewInset),
+            previewTextField.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor, constant: Constants.previewInset),
+            previewTextField.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor, constant: -Constants.previewInset),
+            previewTextField.topAnchor.constraint(equalTo: previewContainer.topAnchor, constant: Constants.previewInset),
+            previewTextField.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor, constant: -Constants.previewInset)
+        ])
     }
 
     private func updateItems(_ items: [ClipboardItem]) {
@@ -215,6 +274,7 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         tableView.frame.size.height = max(CGFloat(filteredItems.count) * Constants.rowHeight, Constants.rowHeight)
         tableView.reloadData()
         selectDefaultRowIfNeeded()
+        updatePreview()
     }
 
     private func selectDefaultRowIfNeeded() {
@@ -292,6 +352,10 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
         filteredItems.count
     }
 
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updatePreview()
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let identifier = NSUserInterfaceItemIdentifier("HistoryCell")
         let cellView: NSTableCellView
@@ -320,6 +384,31 @@ final class HistoryWindowController: NSWindowController, NSTableViewDataSource, 
 
         cellView.textField?.stringValue = displayString(for: filteredItems[row])
         return cellView
+    }
+
+    private func updatePreview() {
+        guard let item = selectedItem else {
+            showTextPreview("No history yet")
+            return
+        }
+
+        if let image = item.previewImage {
+            previewImageView.image = image
+            previewCaptionField.stringValue = displayString(for: item)
+            previewImageView.isHidden = false
+            previewCaptionField.isHidden = false
+            previewTextField.isHidden = true
+        } else {
+            showTextPreview(displayString(for: item))
+        }
+    }
+
+    private func showTextPreview(_ text: String) {
+        previewImageView.image = nil
+        previewImageView.isHidden = true
+        previewCaptionField.isHidden = true
+        previewTextField.stringValue = text
+        previewTextField.isHidden = false
     }
 
     private func displayString(for item: ClipboardItem) -> String {
@@ -399,5 +488,38 @@ private final class HistoryTableView: NSTableView {
 private extension NSEvent {
     var isCommandC: Bool {
         keyCode == 8 && modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+    }
+}
+
+private final class PreviewContainerView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        wantsLayer = true
+        layer?.borderWidth = 1
+        layer?.cornerRadius = 6
+        updateLayerColors()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateLayerColors()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateLayerColors()
+    }
+
+    private func updateLayerColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
+        }
     }
 }

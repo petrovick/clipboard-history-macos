@@ -6,6 +6,7 @@ final class SettingsStore {
         static let isCapturePaused = "isCapturePaused"
         static let maxHistoryItems = "maxHistoryItems"
         static let maxItemSizeBytes = "maxItemSizeBytes"
+        static let maxStorageSizeBytes = "maxStorageSizeBytes"
         static let retentionDays = "retentionDays"
         static let skipShortOneTimeCodes = "skipShortOneTimeCodes"
     }
@@ -32,6 +33,11 @@ final class SettingsStore {
         set { defaults.set(max(1, newValue), forKey: Key.maxItemSizeBytes) }
     }
 
+    var maxStorageSizeBytes: Int {
+        get { defaults.integer(forKey: Key.maxStorageSizeBytes) }
+        set { defaults.set(max(1, newValue), forKey: Key.maxStorageSizeBytes) }
+    }
+
     var retentionDays: Int {
         get { defaults.integer(forKey: Key.retentionDays) }
         set { defaults.set(max(1, newValue), forKey: Key.retentionDays) }
@@ -46,7 +52,8 @@ final class SettingsStore {
         defaults.register(defaults: [
             Key.isCapturePaused: false,
             Key.maxHistoryItems: 100,
-            Key.maxItemSizeBytes: 100 * 1024,
+            Key.maxItemSizeBytes: 10 * 1024 * 1024,
+            Key.maxStorageSizeBytes: 500 * 1024 * 1024,
             Key.retentionDays: 7,
             Key.skipShortOneTimeCodes: true
         ])
